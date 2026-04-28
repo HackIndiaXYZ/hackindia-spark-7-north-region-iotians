@@ -4,7 +4,10 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 
 const VALID_STATUSES = ['active', 'on_trip', 'idle', 'maintenance'];
 
-async function addTruck({ ownerId, plate, model, type, year }) {
+/**
+ * @param {{ ownerId, plate, model, type, year, driverId? }} params
+ */
+async function addTruck({ ownerId, plate, model, type, year, driverId }) {
   const db = getDb();
 
   // Unique plate check
@@ -16,7 +19,6 @@ async function addTruck({ ownerId, plate, model, type, year }) {
 
   const truckId = uuidv4();
   const now     = admin.firestore.FieldValue.serverTimestamp();
-
   const currentYear = new Date().getFullYear();
   const truckAge = year ? currentYear - year : 0;
 
@@ -27,7 +29,7 @@ async function addTruck({ ownerId, plate, model, type, year }) {
     type:  type  || null,
     year:  year  || null,
     status: 'idle',
-    assignedDriverId: null,
+    assignedDriverId: driverId || null,
     lastLocation: null,
     lastSeen: null,
     // ML Performance Metrics - initialized with defaults
@@ -40,24 +42,92 @@ async function addTruck({ ownerId, plate, model, type, year }) {
     createdAt: now, updatedAt: now,
   };
 
-  await db.collection(COLLECTIONS.TRUCKS).doc(truckId).set(truck);
+  if (driverId) {
+    // Race-condition guard: verify driver is still available
+    const driverDoc = await db.collection(COLLECTIONS.DRIVERS).doc(driverId).get();
+    if (!driverDoc.exists) {
+      const err = new Error('Driver not found'); err.statusCode = 404; throw err;
+    }
+    const driverData = driverDoc.data();
+    if (driverData.ownerId !== ownerId) {
+      const err = new Error('Forbidden'); err.statusCode = 403; throw err;
+    }
+    if (driverData.status !== 'available' || driverData.assignedTruckId !== null) {
+      const err = new Error('Selected driver is no longer available'); err.statusCode = 409; throw err;
+    }
+
+    // Atomic batch write: create truck + update driver
+    const batch = db.batch();
+    batch.set(db.collection(COLLECTIONS.TRUCKS).doc(truckId), truck);
+    batch.update(driverDoc.ref, {
+      assignedTruckId: truckId,
+      status: 'on_trip',
+      updatedAt: now,
+    });
+    await batch.commit();
+  } else {
+    await db.collection(COLLECTIONS.TRUCKS).doc(truckId).set(truck);
+  }
+
   return truck;
 }
 
-async function getTrucks(ownerId) {
+/**
+ * @param {string} ownerId
+ * @param {{ status?: string }} filters
+ * @param {boolean} includeMl - Whether to include ML predictions
+ */
+async function getTrucks(ownerId, filters = {}, includeMl = false) {
   const db   = getDb();
-  // Fetch without orderBy to avoid requiring a composite index.
-  // Sort in-memory by createdAt descending.
   const snap = await db.collection(COLLECTIONS.TRUCKS)
     .where('ownerId', '==', ownerId)
     .get();
-  return snap.docs
+
+  let trucks = snap.docs
     .map(d => d.data())
     .sort((a, b) => {
       const ta = a.createdAt?.toMillis?.() ?? 0;
       const tb = b.createdAt?.toMillis?.() ?? 0;
       return tb - ta;
     });
+
+  // In-memory filter for idle trucks (avoids composite index)
+  if (filters.status === 'idle') {
+    trucks = trucks.filter(t => t.status === 'idle' && t.assignedDriverId === null);
+  }
+
+  // Add ML predictions if requested - use batch prediction for speed
+  if (includeMl && trucks.length > 0) {
+    const mlService = require('./mlService');
+    try {
+      const trucksWithFeatures = trucks.map(t => ({
+        id: t.truckId,
+        maintenance_score: t.maintenance_score || 90,
+        fuel_efficiency: t.fuel_efficiency || 5.5,
+        breakdown_count: t.breakdown_count || 0,
+        age_years: t.age_years || 0,
+        total_trips: t.total_trips || 0,
+        avg_load_capacity_used: t.avg_load_capacity_used || 75,
+      }));
+      
+      const predictions = await mlService.batchPredictTrucks(trucksWithFeatures);
+      
+      // Map predictions back to trucks
+      const predictionMap = new Map(predictions.map(p => [p.id, p.predicted_score]));
+      return trucks.map(truck => ({
+        ...truck,
+        predicted_score: predictionMap.get(truck.truckId) || null,
+      }));
+    } catch (err) {
+      // If ML fails, return trucks without predictions
+      return trucks.map(truck => ({
+        ...truck,
+        predicted_score: null,
+      }));
+    }
+  }
+
+  return trucks;
 }
 
 async function getTruckById(truckId, ownerId) {
@@ -88,7 +158,20 @@ async function deleteTruck(truckId, ownerId) {
   const doc = await db.collection(COLLECTIONS.TRUCKS).doc(truckId).get();
   if (!doc.exists) { const err = new Error('Truck not found'); err.statusCode = 404; throw err; }
   if (doc.data().ownerId !== ownerId) { const err = new Error('Forbidden'); err.statusCode = 403; throw err; }
-  await doc.ref.delete();
+
+  const batch = db.batch();
+  batch.delete(doc.ref);
+
+  // Cascade: delete associated insurance record if it exists
+  const insuranceSnap = await db.collection(COLLECTIONS.INSURANCE)
+    .where('truckId', '==', truckId)
+    .limit(1)
+    .get();
+  if (!insuranceSnap.empty) {
+    batch.delete(insuranceSnap.docs[0].ref);
+  }
+
+  await batch.commit();
 }
 
 /**
@@ -130,15 +213,7 @@ async function updateTruckMetrics(truckId, ownerId, metrics) {
 
   updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
   await doc.ref.update(updates);
-  
   return { truckId, ...updates };
 }
 
-module.exports = { 
-  addTruck, 
-  getTrucks, 
-  getTruckById, 
-  updateTruckStatus, 
-  deleteTruck,
-  updateTruckMetrics 
-};
+module.exports = { addTruck, getTrucks, getTruckById, updateTruckStatus, deleteTruck, updateTruckMetrics };
