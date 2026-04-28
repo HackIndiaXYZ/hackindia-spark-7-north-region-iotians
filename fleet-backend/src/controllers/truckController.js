@@ -10,7 +10,9 @@ async function addTruck(req, res, next) {
 
 async function getTrucks(req, res, next) {
   try {
-    const trucks = await truckService.getTrucks(req.user.uid);
+    const filters = req.query.status ? { status: req.query.status } : {};
+    const includeMl = req.query.ml === 'true';
+    const trucks = await truckService.getTrucks(req.user.uid, filters, includeMl);
     return success(res, { trucks, count: trucks.length });
   } catch (err) { next(err); }
 }
@@ -38,20 +40,9 @@ async function deleteTruck(req, res, next) {
 
 async function updateTruckMetrics(req, res, next) {
   try {
-    const result = await truckService.updateTruckMetrics(
-      req.params.truckId, 
-      req.user.uid, 
-      req.body
-    );
+    const result = await truckService.updateTruckMetrics(req.params.truckId, req.user.uid, req.body);
     return success(res, result, 'Truck metrics updated');
   } catch (err) { next(err); }
 }
 
-module.exports = { 
-  addTruck, 
-  getTrucks, 
-  getTruck, 
-  updateStatus, 
-  deleteTruck,
-  updateTruckMetrics 
-};
+module.exports = { addTruck, getTrucks, getTruck, updateStatus, deleteTruck, updateTruckMetrics };

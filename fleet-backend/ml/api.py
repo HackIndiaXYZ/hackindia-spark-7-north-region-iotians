@@ -51,6 +51,43 @@ def predict_driver():
     return jsonify({"predicted_score": round(pred, 2)})
 
 
+@app.route("/predict/drivers/batch", methods=["POST"])
+def predict_drivers_batch():
+    """Batch prediction for multiple drivers"""
+    payload = request.get_json(silent=True) or {}
+    drivers = payload.get("drivers", [])
+    
+    if not drivers:
+        return jsonify({"error": "No drivers provided"}), 400
+    
+    try:
+        artifact = load_model(DRIVER_MODEL_PATH)
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 500
+    
+    scaler = artifact["feature_scaler"]
+    model = artifact["model"]
+    
+    results = []
+    for driver in drivers:
+        try:
+            values = np.array([[float(driver.get(f, 0)) for f in DRIVER_FEATURES]])
+            pred = model.predict(scaler.transform(values))[0]
+            pred = max(0.0, min(100.0, float(pred)))
+            results.append({
+                "id": driver.get("id"),
+                "predicted_score": round(pred, 2)
+            })
+        except Exception as e:
+            results.append({
+                "id": driver.get("id"),
+                "predicted_score": None,
+                "error": str(e)
+            })
+    
+    return jsonify({"predictions": results})
+
+
 @app.route("/predict/truck", methods=["POST"])
 def predict_truck():
     payload = request.get_json(silent=True) or {}
@@ -79,6 +116,43 @@ def predict_truck():
     return jsonify({"predicted_score": round(pred, 2)})
 
 
+@app.route("/predict/trucks/batch", methods=["POST"])
+def predict_trucks_batch():
+    """Batch prediction for multiple trucks"""
+    payload = request.get_json(silent=True) or {}
+    trucks = payload.get("trucks", [])
+    
+    if not trucks:
+        return jsonify({"error": "No trucks provided"}), 400
+    
+    try:
+        artifact = load_model(TRUCK_MODEL_PATH)
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 500
+    
+    scaler = artifact["feature_scaler"]
+    model = artifact["model"]
+    
+    results = []
+    for truck in trucks:
+        try:
+            values = np.array([[float(truck.get(f, 0)) for f in TRUCK_FEATURES]])
+            pred = model.predict(scaler.transform(values))[0]
+            pred = max(0.0, min(100.0, float(pred)))
+            results.append({
+                "id": truck.get("id"),
+                "predicted_score": round(pred, 2)
+            })
+        except Exception as e:
+            results.append({
+                "id": truck.get("id"),
+                "predicted_score": None,
+                "error": str(e)
+            })
+    
+    return jsonify({"predictions": results})
+
+
 # Legacy endpoint for backward compatibility
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -97,6 +171,36 @@ def health():
             "truck": "loaded" if truck_model_exists else "not_found"
         }
     })
+
+
+@app.route("/train/driver", methods=["POST"])
+def train_driver():
+    """Trigger driver model retraining"""
+    try:
+        from train_driver_model import main as train_driver_main
+        train_driver_main()
+        return jsonify({
+            "status": "success",
+            "message": "Driver model trained successfully",
+            "model_path": str(DRIVER_MODEL_PATH)
+        })
+    except Exception as e:
+        return jsonify({"error": f"Training failed: {str(e)}"}), 500
+
+
+@app.route("/train/truck", methods=["POST"])
+def train_truck():
+    """Trigger truck model retraining"""
+    try:
+        from train_truck_model import main as train_truck_main
+        train_truck_main()
+        return jsonify({
+            "status": "success",
+            "message": "Truck model trained successfully",
+            "model_path": str(TRUCK_MODEL_PATH)
+        })
+    except Exception as e:
+        return jsonify({"error": f"Training failed: {str(e)}"}), 500
 
 
 if __name__ == "__main__":
