@@ -36,4 +36,22 @@ async function deleteTruck(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { addTruck, getTrucks, getTruck, updateStatus, deleteTruck };
+async function updateTruckMetrics(req, res, next) {
+  try {
+    const result = await truckService.updateTruckMetrics(
+      req.params.truckId, 
+      req.user.uid, 
+      req.body
+    );
+    return success(res, result, 'Truck metrics updated');
+  } catch (err) { next(err); }
+}
+
+module.exports = { 
+  addTruck, 
+  getTrucks, 
+  getTruck, 
+  updateStatus, 
+  deleteTruck,
+  updateTruckMetrics 
+};

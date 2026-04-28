@@ -158,12 +158,36 @@ async function main() {
   const statusOptions = ['active', 'on_trip', 'idle', 'active', 'on_trip'];
   const statusBatch = db.batch();
   ownerTrucks.forEach((truck, i) => {
-    statusBatch.update(db.collection('trucks').doc(truck.id), {
-      status: statusOptions[i % statusOptions.length],
-    });
+    // Add ML metrics if not present
+    const updates = {
+      status: statusOptions[i % statusOptions.length]
+    };
+    
+    // Initialize ML metrics with realistic values if missing
+    if (truck.maintenance_score === undefined) {
+      updates.maintenance_score = rand(65, 98);
+    }
+    if (truck.fuel_efficiency === undefined) {
+      updates.fuel_efficiency = rand(45, 75) / 10; // 4.5 to 7.5
+    }
+    if (truck.breakdown_count === undefined) {
+      updates.breakdown_count = rand(0, 8);
+    }
+    if (truck.age_years === undefined) {
+      const currentYear = new Date().getFullYear();
+      updates.age_years = truck.year ? currentYear - truck.year : rand(2, 7);
+    }
+    if (truck.total_trips === undefined) {
+      updates.total_trips = rand(50, 800);
+    }
+    if (truck.avg_load_capacity_used === undefined) {
+      updates.avg_load_capacity_used = rand(65, 92);
+    }
+    
+    statusBatch.update(db.collection('trucks').doc(truck.id), updates);
   });
   await statusBatch.commit();
-  console.log('🚛  Updated truck statuses (active/on_trip/idle)');
+  console.log('🚛  Updated truck statuses and ML metrics (active/on_trip/idle)');
 
   console.log('\n🎉  Seed complete! Restart the app and pull-to-refresh.');
   process.exit(0);
