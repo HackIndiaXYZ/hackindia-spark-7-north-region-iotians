@@ -22,7 +22,7 @@ Make fleet operations **transparent, efficient, and data-driven**
 ## 🎥 Demo
 
 - APK: https://  
-- Video: https://  
+- Video: [Link](https://drive.google.com/file/d/1W-e2QSyqel3k9qyUh3rgJ7ItvqekpSXe/view?usp=sharing) 
 
 ---
 
